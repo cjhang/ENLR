@@ -1,0 +1,143 @@
+# Reference expected output of the pPXF 6.7.13 examples.
+# Python 3.6 using NumPy 1.15, SciPy 1.1, Matplotlib 2.2
+###############################################################################
+
+
+>>> runfile('ppxf_example_kinematics_sauron.py', wdir=r'public_programs/ppxf')
+
+Best Fit:       Vel     sigma        h3        h4
+ comp. 0:       436       113     0.032     0.066
+chi2/DOF: 1.015
+method = capfit ; Jac calls: 7 ; Func calls: 37 ; Status: 2
+Nonzero Templates:  9  /  150
+Formal errors:
+     dV    dsigma   dh3      dh4
+     2.4     5.2   0.018   0.032
+Elapsed time in pPXF: 0.86 s
+
+###############################################################################
+
+
+>>> runfile('ppxf_example_kinematics_sdss.py', wdir=r'public_programs/ppxf')
+
+Best Fit:       Vel     sigma        h3        h4
+ comp. 0:       930       226    -0.023     0.083
+chi2/DOF: 1.032
+method = capfit ; Jac calls: 4 ; Func calls: 22 ; Status: 2
+Nonzero Templates:  5  /  150
+Formal errors:
+     dV    dsigma   dh3      dh4
+     2.6     3.5  0.0093   0.011
+Elapsed time in PPXF: 1.36 s
+
+###############################################################################
+
+
+>>> runfile('ppxf_example_population_gas_sdss.py', wdir=r'public_programs/ppxf')
+
+===============================================
+ Fit with free Balmer lines and [SII] doublet:
+===============================================
+
+Emission lines included in gas templates:
+['Hdelta' 'Hgamma' 'Hbeta' 'Halpha' '[SII]6716' '[SII]6731' '[OIII]5007_d'
+ '[OI]6300_d' '[NII]6583_d']
+Best Fit:       Vel     sigma        h3        h4
+ comp. 0:      1212        98    -0.032     0.048
+ comp. 1:      1207        78
+ comp. 2:      1197        68
+chi2/DOF: 1.029
+method = capfit ; Jac calls: 5 ; Func calls: 97 ; Status: 2
+Nonzero Templates:  42  /  159
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+gas_component   name       flux       err      V     sig
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Comp: 1        Hdelta     0.1147      0.04    1207    78
+Comp: 1        Hgamma     0.2409      0.04    1207    78
+Comp: 1         Hbeta     0.4321     0.039    1207    78
+Comp: 1        Halpha      1.131     0.036    1207    78
+Comp: 2     [SII]6716     0.2433     0.035    1197    68
+Comp: 2     [SII]6731     0.1826     0.035    1197    68
+Comp: 2  [OIII]5007_d      1.245     0.047    1197    68
+Comp: 2    [OI]6300_d    0.05903     0.044    1197    68
+Comp: 2   [NII]6583_d     0.4037     0.044    1197    68
+---------------------------------------------------------
+Desired Delta Chi^2: 76.11
+Current Delta Chi^2: 83.4
+Elapsed time in PPXF: 9.58 s
+Weighted <logAge> [yr]: 10
+Weighted <[M/H]>: -0.0277
+M/L_r: 4.915
+
+=======================================================
+ Fit with tied Balmer lines and limited [SII] doublet:
+=======================================================
+
+Emission lines included in gas templates:
+['Balmer' '[SII]6731_d1' '[SII]6731_d2' '[OIII]5007_d' '[OI]6300_d'
+ '[NII]6583_d']
+Best Fit:       Vel     sigma        h3        h4
+ comp. 0:      1213        98    -0.031     0.043
+ comp. 1:      1207        78
+ comp. 2:      1197        67
+chi2/DOF: 1.018
+method = capfit ; Jac calls: 5 ; Func calls: 102 ; Status: 2
+Gas Reddening E(B-V): 0.049
+Nonzero Templates:  39  /  156
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+gas_component   name       flux       err      V     sig
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Comp: 1        Balmer      2.256     0.066    1207    78
+Comp: 2  [SII]6731_d1    0.02499     0.088    1197    67
+Comp: 2  [SII]6731_d2     0.3996     0.093    1197    67
+Comp: 2  [OIII]5007_d      1.245     0.047    1197    67
+Comp: 2    [OI]6300_d    0.05919     0.044    1197    67
+Comp: 2   [NII]6583_d     0.4033     0.044    1197    67
+---------------------------------------------------------
+Desired Delta Chi^2: 76.11
+Current Delta Chi^2: 51.6
+Elapsed time in PPXF: 9.76 s
+Weighted <logAge> [yr]: 10
+Weighted <[M/H]>: -0.0305
+M/L_r: 4.899
+
+###############################################################################
+
+
+>>> runfile('ppxf_example_sky_and_symmetric_losvd.py', wdir=r'public_programs/ppxf')
+
+The input values are: Vel=200, sigma=300, h3=0.1, h4=0.1
+
+Best Fit:       Vel     sigma        h3        h4
+ comp. 0:       204       304     0.092     0.093
+chi2/DOF: 0.9784
+method = capfit ; Jac calls: 3 ; Func calls: 41 ; Status: 2
+Nonzero Templates:  12  /  159
+Elapsed time in pPXF: 6.57 s
+
+###############################################################################
+
+
+>>> runfile('ppxf_example_two_components.py', wdir=r'public_programs/ppxf')
+
++++++++++++++++++++++++++++++++++++++++++++++
+Best Fit:       Vel     sigma
+ comp. 0:       300       101
+ comp. 1:         3       203
+chi2/DOF: 0.9689
+method = capfit ; Jac calls: 10 ; Func calls: 52 ; Status: 2
+Nonzero Templates:  3  /  4
+Templates weights:
+         0     0.998     0.998   0.00585
+---------------------------------------------
+Best Fit:       Vel     sigma
+ comp. 0:       224       204
+chi2/DOF: 3.464
+method = capfit ; Jac calls: 5 ; Func calls: 17 ; Status: 2
+Nonzero Templates:  2  /  4
+Templates weights:
+         0      1.04     0.949         0
+=============================================
+Total elapsed time 0.63 s
+
+###############################################################################
