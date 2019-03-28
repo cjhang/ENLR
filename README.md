@@ -4,7 +4,7 @@
 ## Usage
 This repository contains the source code used for the study of spatial extension of AGN narrow line region. The structure of this repository is summarized in [Main.ipynb](Main.ipynb)
 
-To make all the code work properly, you should install all the packages in requirements.txt
+To make all the code work properly, you should install all the packages:
 
 ```text
 numpy >= 1.16
