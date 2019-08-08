@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import stats
 from matplotlib import pyplot as plt
 from astropy import units as u
 from astropy import constants as const
@@ -7,9 +8,8 @@ from astropy.table import Table
 from astropy import wcs, coordinates
 
 from .ppxf import ppxf, ppxf_util, miles_util, capfit
-from vorbin.voronoi_2d_binning import voronoi_2d_binning
-
-from .manga import MaNGA
+from .voronoi_2d_binning import voronoi_2d_binning
+from .manga import MaNGA, package_path
 from .maps import Maps
 from .spaxel import Spaxel
 
@@ -57,25 +57,41 @@ class Datacube(MaNGA):
         self.noise = np.sqrt(1/noise)
         # self.masked_flux = self.flux*np.logical_not(self.mask)
         if load_fit:
-            self.model = np.ma.array(
-                    self.datacube['MODEL'].data, 
-                    mask=self.bm.flagged(self.datacube['MASK'].data, 
-                                         ['FITIGNORED',]))
-            self.stellarcontinuum = np.ma.array(    \
-                    self.datacube['MODEL'].data     \
-                    - self.datacube['EMLINE'].data  \
-                    - self.datacube['EMLINE_BASE'].data, \
-                    mask=self.bm.flagged(self.datacube['MASK'].data, \
-                                         ['FITIGNORED',])) 
-            self.emlines = np.ma.array( 
-                    self.datacube['EMLINE'].data, 
-                    mask=self.bm.flagged(self.datacube['EMLINE_MASK'].data, 
-                                         ['ELIGNORED',]))
-            self.emline_base = np.ma.array(
-                    self.datacube['EMLINE_BASE'].data, 
-                    mask=self.bm.flagged(self.datacube['EMLINE_MASK'].data, 
-                                         ['ELIGNORED',]))
-            self.residual = self.flux - self.model
+            if self.dap_version < '2.3.0':
+                self.model = np.ma.array(
+                        self.datacube['MODEL'].data, 
+                        mask=self.bm.flagged(self.datacube['MASK'].data, 
+                                             ['FITIGNORED',]))
+                self.stellarcontinuum = np.ma.array(    \
+                        self.datacube['MODEL'].data     \
+                        - self.datacube['EMLINE'].data  \
+                        - self.datacube['EMLINE_BASE'].data, \
+                        mask=self.bm.flagged(self.datacube['MASK'].data, \
+                                             ['FITIGNORED',])) 
+                self.emlines = np.ma.array( 
+                        self.datacube['EMLINE'].data, 
+                        mask=self.bm.flagged(self.datacube['EMLINE_MASK'].data, 
+                                             ['ELIGNORED',]))
+                self.emline_base = np.ma.array(
+                        self.datacube['EMLINE_BASE'].data, 
+                        mask=self.bm.flagged(self.datacube['EMLINE_MASK'].data, 
+                                             ['ELIGNORED',]))
+                self.residual = self.flux - self.model
+            else:
+                self.model = np.ma.array(
+                        self.datacube['MODEL'].data, 
+                        mask=self.bm.flagged(self.datacube['MODEL_MASK'].data, 
+                                             ['FITIGNORED',]))
+                self.stellarcontinuum = np.ma.array(    \
+                        self.datacube['STELLAR'].data,     \
+                        mask=self.bm.flagged(self.datacube['STELLAR_MASK'].data, \
+                                             ['FLUXINVALID', 'IVARINVALID', 'ARTIFACT'])) 
+                self.emlines = np.ma.array( 
+                        self.datacube['EMLINE'].data, 
+                        mask=self.bm.flagged(self.datacube['MASK'].data, 
+                                             ['ELIGNORED',]))
+                self.emline_base = np.full_like(self.emlines, 0)
+                self.residual = self.flux - self.model
 
     def __getitem__(self, xy):
         return self.getSpaxel(x=xy[0], y=xy[1])
@@ -178,31 +194,75 @@ class Datacube(MaNGA):
             spaxel.flux = flux
             spaxel.noise = np.sqrt(noise2)
         return spaxel
-
-    def genBinMatrix(self, emline, targetSN, quiet=True, mask=None, **kwargs):
-        flux = self.flux_map2(emline, mask=mask, **kwargs)
-        select = ~mask & (flux[0]/flux[1] > 0.5)
-        binMatrix = np.full(flux[0].shape, -1)
-        map_flux = flux[0][select]
-        map_err = flux[1][select]
+    
+    def genBinMatrix(self, flux, flux_err, targetSN, mask=None, quiet=True, **kwargs):
+        x_coor, y_coor = self.maps.maps['SPX_SKYCOO'].data
+        if mask is not None:
+            select = ~mask & (flux/flux_err > 1)
+        else:
+            select = (flux/flux_err) > 1
+        binMatrix = np.full(flux.shape, -1)
+        map_flux = flux[select]
+        map_err = flux_err[select]
         # print("SNR:", np.sum(flux[0][select])/np.sum(flux[1][select]))
-        if np.sum(map_flux)/np.sum(map_err) <= targetSN:
-            if not quiet:
-                print("cannot reach global {}".format(targetSN), 'uniform Bin-id was used!')
-            return binMatrix
+        if np.max(map_flux/map_err) <= targetSN:
+           if not quiet:
+               print("cannot reach global {}".format(targetSN), 'uniform Bin-id was used!')
+           binMatrix[select] = 0
+           return binMatrix
         if np.min(map_flux/map_err) > targetSN:
-            if not quiet:
-                print("Global SNR reached, no bin needed!")
-            return None
+           if not quiet:
+               print("Global SNR reached, no bin needed!")
+           return None
         binNum, xNode, yNode, xBar, yBar, sn, nPixels, scale = voronoi_2d_binning(
-            self.maps.x[select], self.maps.y[select], map_flux, \
+            x_coor[select], y_coor[select], map_flux, \
             map_err, targetSN, plot=0, quiet=1)
         binMatrix[select] = binNum
         return binMatrix
 
+    def autofit(self, spaxel, quiet=1):
+        """auto fit by F-test and smaller chi^2""" 
+        sp = spaxel
+        try:
+           try: 
+               # fitting with strong AGN
+               pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800)
+               pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800, 
+                                 broad_O3=600)
+           except:
+               # fitting with weak AGN
+               if not quiet:
+                   print('Change emline with fewer emission lines!')
+               pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True)
+               pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True, 
+                                 broad_O3=600)
+        except KeyboardInterrupt:
+           sys.exit()
+        except: # for failed fitting
+           if not quiet:
+               print("Fitting failed!")
+           raise ValueError("Fitting failed!")
+
+        F = (pp1.chi2_orig - pp2.chi2_orig)*(pp2.vars_num - pp2.params_num ) \
+               / (pp2.params_num - pp1.params_num) / pp2.chi2_orig
+        p_value = 1 - stats.f.cdf(F, pp2.params_num - pp1.params_num, 
+                                    pp2.vars_num - pp2.params_num)
+        if (p_value < 0.05) and ((pp2.chi2 - 1) < (pp1.chi2 - 1)) \
+               and np.any(pp2.gas_flux[-2:]/pp2.gas_flux_error[-2:] > 3):
+           pp = pp2
+           if not quiet:
+               print('Prefer broad [O III]')
+        else:
+           pp = pp1
+        if not quiet:
+           print('p_value:', p_value, 'fit1 chi2:', pp1.chi2, 
+                 'fit2 chi2:', pp2.chi2)
+        return pp
+
     def flux_map(self, filename, mask=None, tie_balmer=False, limit_doublets=False, quiet=True,
                  directory='./', auto=False, broad_balmer=800, broad_O3=600, 
-                 binmatrix=None, fewer_balmer=False, save_cube=False):
+                 binmatrix=None, fewer_balmer=False, save_maps=False, 
+                 save_cube=False):
         '''output the map imformation into a fits file
 
         Params:
@@ -214,15 +274,19 @@ class Datacube(MaNGA):
         lam_range_gal = np.array([np.min(self.wave), np.max(self.wave)])/(1+self.z)
         # get the template imformation
         velscale = 299792.458 * np.log(self.wave[1]/self.wave[0])
-        FWHM_gal = 2.7
-        miles = miles_util.miles('./ppxf_old/miles_models/Mun1.30*.fits', velscale, FWHM_gal)
+        FWHM_gal = self.psf
+        miles = miles_util.miles(package_path + '/ppxf/miles_models/Mun1.30*.fits',
+                velscale, FWHM_gal)
         # get the fitted emission line
         gas_templates, gas_names, line_wave = ppxf_util.emission_lines(
                     miles.log_lam_temp, lam_range_gal, FWHM_gal, 
                     tie_balmer=tie_balmer, limit_doublets=limit_doublets, 
                     broad_balmer=True, broad_O3=True, quiet=True)
-        multimap = dict(zip(gas_names, np.zeros((len(gas_names), 4, naxis1, naxis2))))
+        # save flux, flux_err, v, sigma
+        multimap = dict(zip(gas_names, np.zeros((len(gas_names), 4,
+                                                 naxis1, naxis2)))) 
         datacube = np.zeros((*self.flux.shape, 3)) # 3 for balmer, forbidden, broad
+
         if binmatrix:
             self.stack(binmatrix)
 
@@ -236,33 +300,33 @@ class Datacube(MaNGA):
                 if auto:
                     try:
                         try: 
-                            # fitting with strong AGN
+                            # fitting with strong agn
                             pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800)
                             pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800, 
                                               broad_O3=600)
                         except:
-                            # fitting with weak AGN
+                            # fitting with weak agn
                             if not quiet:
-                                print('Change emline with fewer emission lines!')
-                            pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True)
-                            pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True, 
+                                print('change emline with fewer emission lines!')
+                            pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=true)
+                            pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=true, 
                                               broad_O3=600)
                     except KeyboardInterrupt:
                         sys.exit()
                     except: # for failed fitting
                         if not quiet:
-                            print("Fitting failed!")
+                            print("fitting failed!")
                         continue
 
-                    F = (pp1.chi2_orig - pp2.chi2_orig)*(pp2.vars_num - pp2.params_num ) \
+                    f = (pp1.chi2_orig - pp2.chi2_orig)*(pp2.vars_num - pp2.params_num ) \
                             / (pp2.params_num - pp1.params_num) / pp2.chi2_orig
-                    p_value = 1 - stats.f.cdf(F, pp2.params_num - pp1.params_num, 
+                    p_value = 1 - stats.f.cdf(f, pp2.params_num - pp1.params_num, 
                                                  pp2.vars_num - pp2.params_num)
                     if (p_value < 0.05) and ((pp2.chi2 - 1) < (pp1.chi2 - 1)) \
                             and np.any(pp2.gas_flux[-2:]/pp2.gas_flux_error[-2:] > 3):
                         pp = pp2
                         if not quiet:
-                            print('Prefer broad [O III]')
+                            print('prefer broad [o iii]')
                     else:
                         pp = pp1
                     if not quiet:
@@ -294,8 +358,8 @@ class Datacube(MaNGA):
                                     pp.weights[comp_select] * pp.flux_scale)
                         datacube[wave_mask, x, y, comp_n] = cube_comp[:, 0]
         hdr = fits.Header()
-        hdr['AUTHER'] = 'cjhang'
-        hdr['COMMENT'] = "Fitting emission lines with broad lines"
+        hdr['auther'] = 'cjhang'
+        hdr['comment'] = "fitting emission lines with broad lines"
         primary_hdu = fits.PrimaryHDU(header=hdr)
         hdu_list = [primary_hdu]
         for name in gas_names:
@@ -303,22 +367,6 @@ class Datacube(MaNGA):
         hdus = fits.HDUList(hdu_list)
         hdus.writeto('{}/{}.fits'.format(directory, filename), overwrite=True)
 
-        ### saving the maps and cubes seperately
-        # hdr = fits.Header()
-        # hdr['AUTHER'] = 'cjhang'
-        # hdr['COMMENT'] = "Fitting emission lines with broad lines"
-        # primary_hdu = fits.PrimaryHDU(header=hdr)
-        
-        # # saveing the map data
-        # hdu_maps = [primary_hdu]
-        # for name in gas_names:
-            # hdu_maps.append(fits.ImageHDU(multimap[name], name=name))
-
-        # hdu_maps = fits.HDUList(hdu_maps)
-        # hdu_maps.writeto('{}/{}-maps.fits'.format('./data', filename), overwrite=True)
-
-        # # saving the fitted datacube data
-        # # datacubes = np.zeros(np.unique(pp.component), *self.flux.shape)
         if save_cube:
             hdu_cubes_wave = fits.ImageHDU(self.wave, name='wave')
             hdu_cubes_flux = fits.ImageHDU(self.flux.data - self.stellarcontinuum.data, name='emline')
@@ -327,58 +375,171 @@ class Datacube(MaNGA):
             hdu_cubes = fits.HDUList(hdu_cubes)
             hdu_cubes.writeto('{}/{}-cubes.fits'.format(directory, filename), overwrite=True)
 
-        # return multimap
-        
-    def flux_map2(self, names, mask=None, window=20, fix_invalid=True, **kwargs):
-        m = Maps(self.plateifu)
-        if isinstance(names, str):
-            names = [names]
-        #agn, *others = m.bptregion(snr=3)
-        lines_num = len(names)
-        a, b = m.naxis1, m.naxis2
+    def flux_map_new(self, filename, mask=None, tie_balmer=False, limit_doublets=False, quiet=True,
+                 directory='./', auto=False, broad_balmer=800, broad_O3=600, 
+                 binmatrix=None, fewer_balmer=False, save_maps=True, 
+                 save_cube=False):
+        '''output the map imformation into a fits file
+
+        Params:
+            filename: the output file name
+        '''
         if mask is None:
-            mask = m.mask
-        flux_map = np.full((lines_num*8, a, b), 0) + 1e-8
-        for i in range(a):
-            for j in range(b):
-                if not mask[i, j]:
-                    sp = self[i, j]
-                    #names = ['Hb-4862', 'OIII-5008', 'Ha-6564']
-                    # print(i,j)
-                    for k in range(lines_num):
-                        emline = names[k]
-                        fline1 = sp.fitline(emline, window=window, quiet=True, **kwargs) 
-                        fline2 = sp.fitline(emline, window=window, broad_component=True, 
-                                            quiet=True, **kwargs)
-                        F = (fline1.chi2 - fline2.chi2)*(fline2.var_num - fline2.para_num ) \
-                                / (fline2.para_num - fline1.para_num) / fline2.chi2
-                        p_value = 1 - stats.f.cdf(F, fline2.para_num - fline1.para_num, 
-                                                     fline2.var_num - fline2.para_num)
-                        if (fline2.bn_ratio > 0.1) and (fline2.broad_snr > 3) \
-                            and (fline2.broad_amp > 3*np.abs(fline2.noise).mean()) \
-                            and (fline2.narrow_snr > 3) and (p_value < 0.05) \
-                            and ((fline2.simple_chi2 - 1) < (fline1.simple_chi2 - 1)):
-                            flux_map[8*k:8*k+8, i, j] = fline2.narrow_flux, \
-                                                        fline2.narrow_flux_err, \
-                                                        fline2.narrow_sigma, \
-                                                        fline2.narrow_v, \
-                                                        fline2.broad_flux, \
-                                                        fline2.broad_flux_err, \
-                                                        fline2.broad_sigma, \
-                                                        fline2.broad_v
-                        else:
-                            # without fit the broad component
-                            flux_map[8*k:8*k+8, i, j] = fline1.narrow_flux, \
-                                                        fline1.narrow_flux_err, \
-                                                        fline1.narrow_sigma, \
-                                                        fline1.narrow_v, \
-                                                        0, 0, 0, 0
-        #flux_map[0][flux_map[0]/(flux_map[1]+1e-8) < 0.1] = -1 # remove the unreal pixels
-        if fix_invalid:
-            return utils.fixmap(flux_map)
+            mask = self.maps.mask
+        npix, naxis1, naxis2 = self.flux.shape
+        lam_range_gal = np.array([np.min(self.wave), np.max(self.wave)])/(1+self.z)
+        # get the template imformation
+        velscale = 299792.458 * np.log(self.wave[1]/self.wave[0])
+        FWHM_gal = self.psf
+        miles = miles_util.miles(package_path + '/ppxf/miles_models/Mun1.30*.fits',
+                velscale, FWHM_gal)
+        # get the fitted emission line
+        gas_templates, gas_names, line_wave = ppxf_util.emission_lines(
+                    miles.log_lam_temp, lam_range_gal, FWHM_gal, 
+                    tie_balmer=tie_balmer, limit_doublets=limit_doublets, 
+                    broad_balmer=True, broad_O3=True, quiet=True)
+        # save flux, flux_err, v, sigma
+        multimap = dict(zip(gas_names, np.zeros((len(gas_names), 4, 
+                                                 naxis1, naxis2)))) 
+        datacube = np.zeros((*self.flux.shape, 3)) # 3 for balmer, forbidden, broad
+
+        if binmatrix is not None:
+            self.stack(binmatrix)
+            for binnum in np.unique(binmatrix):
+                if not quiet:
+                    print("Bin number: {}".format(binnum))
+                fit_pixels = (binmatrix == binnum)
+                x, y = np.where(fit_pixels == True)
+                sp = self[x[0], y[0]]
+                if auto:
+                    try:
+                        try: 
+                            # fitting with strong agn
+                            pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800)
+                            pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800, 
+                                              broad_O3=600)
+                        except:
+                            # fitting with weak agn
+                            if not quiet:
+                                print('change emline with fewer emission lines!')
+                            pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=true)
+                            pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=true, 
+                                              broad_O3=600)
+                    except KeyboardInterrupt:
+                        sys.exit()
+                    except: # for failed fitting
+                        if not quiet:
+                            print("fitting failed!")
+                        continue
+
+                    f = (pp1.chi2_orig - pp2.chi2_orig)*(pp2.vars_num - pp2.params_num ) \
+                            / (pp2.params_num - pp1.params_num) / pp2.chi2_orig
+                    p_value = 1 - stats.f.cdf(f, pp2.params_num - pp1.params_num, 
+                                                 pp2.vars_num - pp2.params_num)
+                    if (p_value < 0.05) and ((pp2.chi2 - 1) < (pp1.chi2 - 1)) \
+                            and np.any(pp2.gas_flux[-2:]/pp2.gas_flux_error[-2:] > 3):
+                        pp = pp2
+                        if not quiet:
+                            print('prefer broad [o iii]')
+                    else:
+                        pp = pp1
+                    if not quiet:
+                        print('p_value:', p_value, 'fit1 chi2:', pp1.chi2, 
+                              'fit2 chi2:', pp2.chi2)
+                else:
+                    pp = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=broad_balmer, 
+                                     broad_O3=broad_O3)
+                dwave = np.roll(pp.lam, -1) - pp.lam
+                dwave[-1] = dwave[-2] # fix the bad point introduced by roll
+                flux = dwave @ pp.matrix * pp.weights * pp.flux_scale
+                flux_err = dwave @ pp.matrix \
+                           * capfit.cov_err(pp.matrix / pp.noise[:, None])[1] \
+                           * pp.flux_scale
+                
+                gas_flux = dict(zip(pp.gas_names, flux))
+                gas_flux_err = dict(zip(pp.gas_names, flux_err))
+                v, sigma = np.transpose(np.array(pp.sol)[pp.component.tolist()])
+                rel_v = dict(zip(pp.gas_names, v - 299792.485 * np.log(1+pp.z)))
+                sigma = dict(zip(pp.gas_names, sigma))
+                for name in pp.gas_names:
+                    # multimap[name][fit_pixels] = gas_flux[name], gas_flux_err[name],\
+                                              # rel_v[name], sigma[name]
+                    multimap[name][0][fit_pixels] = gas_flux[name]
+                    multimap[name][1][fit_pixels] = gas_flux_err[name]
+                    multimap[name][2][fit_pixels] = rel_v[name]
+                    multimap[name][3][fit_pixels] = sigma[name]
+                if save_cube:
+                    for comp_n in [0, 1, 2]: # balmer, forbidden, and broad lines
+                        wave_mask = (self.wave >= pp.lam[0]) & (self.wave <= pp.lam[-1])
+                        comp_select = np.where(pp.component == comp_n)
+                        cube_comp = pp.matrix[:, comp_select] @ (
+                                    pp.weights[comp_select] * pp.flux_scale)
+                        # import pdb; pdb.set_trace()
+                        datacube[wave_mask][fit_pixels][comp_n] = cube_comp[:, 0]
+        
         else:
-            return flux_map
-    
+            for x in range(naxis1):
+                for y in range(naxis2):
+                    if mask[x, y]:
+                        continue
+                    if quiet==2 or quiet==0:
+                        print('coordinate:', [x, y])
+                    sp = self[x, y]
+                    if auto:
+                        try:
+                            pp = self.autofit(sp, quiet=quiet)
+                        except:
+                            continue
+                    else:
+                        pp = sp.ppxf_fit(mode='emline', quiet=quiet, 
+                                         broad_balmer=broad_balmer, 
+                                         broad_O3=broad_O3)
+                    dwave = np.roll(pp.lam, -1) - pp.lam
+                    dwave[-1] = dwave[-2] # fix the bad point introduced by roll
+                    flux = dwave @ pp.matrix * pp.weights * pp.flux_scale
+                    flux_err = dwave @ pp.matrix \
+                               * capfit.cov_err(pp.matrix / pp.noise[:, None])[1] \
+                               * pp.flux_scale
+                    
+                    gas_flux = dict(zip(pp.gas_names, flux))
+                    gas_flux_err = dict(zip(pp.gas_names, flux_err))
+                    v, sigma = np.transpose(np.array(pp.sol)[pp.component.tolist()])
+                    rel_v = dict(zip(pp.gas_names, v - 299792.485 * np.log(1+pp.z)))
+                    sigma = dict(zip(pp.gas_names, sigma))
+                    for name in pp.gas_names:
+                        multimap[name][x, y] = gas_flux[name], gas_flux_err[name],\
+                                                  rel_v[name], sigma[name]
+                    if save_cube:
+                        for comp_n in [0, 1, 2]: # balmer, forbidden, and broad lines
+                            wave_mask = (self.wave >= pp.lam[0]) & (self.wave <= pp.lam[-1])
+                            comp_select = np.where(pp.component == comp_n)
+                            cube_comp = pp.matrix[:, comp_select] @ (
+                                        pp.weights[comp_select] * pp.flux_scale)
+                            datacube[wave_mask, x, y, comp_n] = cube_comp[:, 0]
+        if save_maps or save_cube:
+            hdr = fits.Header()
+            hdr['AUTHER'] = 'cjhang'
+            hdr['COMMENT'] = "Fitting emission lines with broad lines"
+            primary_hdu = fits.PrimaryHDU(header=hdr)
+        
+            if save_maps:
+                hdu_list = [primary_hdu]
+                for name in gas_names:
+                    hdu_list.append(fits.ImageHDU(multimap[name], name=name))
+                hdus = fits.HDUList(hdu_list)
+                hdus.writeto('{}/{}-maps.fits'.format(directory, filename), overwrite=True)
+
+            # # saving the fitted datacube data
+            if save_cube:
+                hdu_cubes_wave = fits.ImageHDU(self.wave, name='wave')
+                hdu_cubes_flux = fits.ImageHDU(self.flux.data - self.stellarcontinuum.data, name='emline')
+                hdu_cubes_fits = fits.ImageHDU(datacube, name='fits')
+                hdu_cubes = [primary_hdu, hdu_cubes_wave, hdu_cubes_flux, hdu_cubes_fits]
+                hdu_cubes = fits.HDUList(hdu_cubes)
+                hdu_cubes.writeto('{}/{}-cubes.fits'.format(directory, filename), overwrite=True)
+        else:
+            return multimap, datacube
+        
     def check_fit(self, emline, window=20, fit_mode='auto', filename=None):
         """
         check the spectrum fitting of a given line

@@ -19,7 +19,14 @@ class FitMaps(Maps):
     def __init__(self, plateifu, fitmaps_dir=None, fitmaps_binned_dir=None):
         super().__init__(plateifu)
         self.fitmaps = fits.open(fitmaps_dir + plateifu + '.fits')
-        self.fitmaps2 = fits.open(fitmaps_binned_dir + plateifu + '.fits')
+        try:
+            self.fitmaps2 = fits.open(fitmaps_binned_dir + plateifu + '.fits')
+        except:
+            try:
+                self.fitmaps2 = fits.open(fitmaps_binned_dir + plateifu + '_binned-maps.fits')
+            except:
+                self.fitmaps2 = fits.open(fitmaps_dir + plateifu + '.fits')
+            
         self.agn, *others = self.bptregion()
         
     def line(self, name):
@@ -32,7 +39,13 @@ class FitMaps(Maps):
         data = self.fitmaps2[name].data
         return data
     
-    def O3map(self, redcorr=True, smooth=False, fix_outlier=True):
+    def O3map(self, redcorr=True, smooth=False, fix_outlier=True, 
+            flux_mode='G'):
+        """
+        flux_mode:
+            G : Gaussian fitted flux
+            S : Non-paramenter sum up
+        """
         Ha, Ha_err = self.fitmaps2['Halpha'].data[0], self.fitmaps2['Halpha'].data[1]
         Hb, Hb_err = self.fitmaps2['Hbeta'].data[0], self.fitmaps2['Hbeta'].data[1]
     
@@ -63,9 +76,14 @@ class FitMaps(Maps):
         if fix_outlier:
             corrector = self.fix_outlier(corrector)
             corrector_err = self.fix_outlier(corrector_err)
-            
-        O3 = self.fitmaps['[OIII]5008'].data[0] + self.fitmaps['_[OIII]5008'].data[0]
-        O3_err = np.sqrt(self.fitmaps['[OIII]5008'].data[1]**2 + self.fitmaps['_[OIII]5008'].data[1]**2)
+        if flux_mode == 'G':
+            O3 = self.fitmaps['[OIII]5008'].data[0] + self.fitmaps['_[OIII]5008'].data[0]
+            O3_err = np.sqrt(self.fitmaps['[OIII]5008'].data[1]**2 + self.fitmaps['_[OIII]5008'].data[1]**2)
+        elif flux_mode == 'S':
+            emline_mode = 'EMLINE_{}FLUX'.format(flux_mode)
+            O3 = self.maps[emline_mode].data[self.emline_dict['OIII-5008']]
+            O3_err = np.sqrt(1/(self.maps[emline_mode+'_IVAR'].data[self.emline_dict['OIII-5008']]+1e-8))
+            # used the DAP results
         O3_corr = O3 * corrector
         O3_corr_err = np.sqrt((corrector_err * O3)**2 + (O3_err * corrector)**2)
         self.E_BV = E_BV

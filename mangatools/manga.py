@@ -16,15 +16,21 @@ from astropy.cosmology import LambdaCDM
 from .config import PRODOCTS, DAP_VERSION, DRP_VERSION, SAS
 import mangatools as mangatools_package 
 
-DAP_DIR = SAS + '/mangawork/manga/spectro/analysis/' + DRP_VERSION \
-              + '/' + DAP_VERSION
-MAPS_DIR = DAP_DIR + '/{}-GAU-MILESHC/'.format(PRODOCTS)
-DRP_DIR = SAS + '/mangawork/manga/spectro/redux/' + DRP_VERSION
-IMAGE_DIR = SAS + "/mangawork/manga/spectro/redux/" + DRP_VERSION \
-                + "/allimages/"
-DRP = Table.read(DRP_DIR + '/drpall-' + DRP_VERSION + '.fits')
-DAP = Table.read(DAP_DIR + '/dapall-' + DRP_VERSION + '-' \
-                         + DAP_VERSION + '.fits')
+DRP_DIR = '{}/mangawork/manga/spectro/redux/{}'.format(SAS, DRP_VERSION)
+DAP_DIR_BASE = '{}/mangawork/manga/spectro/analysis/{}/{}'.format(
+        SAS, DRP_VERSION, DAP_VERSION)
+if DAP_VERSION < '2.3.0':
+    IMAGE_DIR = DRP_DIR + '/allimages/'
+    DAP_DIR = '{}/{}-GAU-MILESHC/'.format(
+            DAP_DIR_BASE, PRODOCTS)
+else:
+    IMAGE_DIR = None
+    DAP_DIR = '{}/{}-MILESHC-MILESHC/'.format(
+            DAP_DIR_BASE, PRODOCTS)
+
+DRP = Table.read(DRP_DIR + '/drpall-' + DRP_VERSION + '.fits', hdu=1)
+DAP = Table.read(DAP_DIR_BASE + '/dapall-' + DRP_VERSION + '-' \
+                         + DAP_VERSION + '.fits', hdu=1)
 
 package_path = os.path.dirname(os.path.realpath(mangatools_package.__file__))
 
@@ -44,6 +50,8 @@ class MaNGA(object):
         self.COSMO = LambdaCDM(H0=70, Om0=0.3, Ode0=0.7)
         self.ESP = 1e-8
         self.C = 299792 # speed of light (km/s)
+        self.drp_version = DRP_VERSION
+        self.dap_version = DAP_VERSION
         ## Pre-read the DRP data
 
         if arg:
@@ -58,14 +66,28 @@ class MaNGA(object):
             print("No valid plateifu or mangaid detected!")
             raise ValueError
         self.plate, self.ifudsgn = re.split('-', self.plateifu)
-        self.mapsfile = MAPS_DIR+self.plate + '/'+self.ifudsgn+'/' \
-                        + 'manga-' + self.plate + '-' + self.ifudsgn \
-                        + '-MAPS-{}-GAU-MILESHC.fits.gz'.format(PRODOCTS)
-        self.datacubefile = MAPS_DIR + '/'+self.plate+'/' \
-                            + self.ifudsgn+'/'+'manga-' + self.plate \
-                            + '-' + self.ifudsgn \
-                            + '-LOGCUBE-{}-GAU-MILESHC.fits.gz'.format(PRODOCTS)
-        self.IMAGE_DIR = IMAGE_DIR
+        self.logcube_file = "{0}/{1}/stack/manga-{1}-{2}-LOGCUBE.fits.gz".format(
+                DRP_DIR, self.plate, self.ifudsgn)
+        if DAP_VERSION < '2.3.0': # before MPL8
+            self.mapsfile = DAP_DIR+self.plate + '/'+self.ifudsgn+'/' \
+                            + 'manga-' + self.plate + '-' + self.ifudsgn \
+                            + '-MAPS-{}-GAU-MILESHC.fits.gz'.format(PRODOCTS)
+            self.datacubefile = DAP_DIR + '/'+self.plate+'/' \
+                                + self.ifudsgn+'/'+'manga-' + self.plate \
+                                + '-' + self.ifudsgn \
+                                + '-LOGCUBE-{}-GAU-MILESHC.fits.gz'.format(PRODOCTS)
+        elif DAP_VERSION >= '2.3.0': #After MPL8
+            self.mapsfile = '{0}/{1}/{2}/manga-{1}-{2}-MAPS-{3}-MILESHC-MILESHC.fits.gz'.format(
+                                    DAP_DIR, self.plate, self.ifudsgn, PRODOCTS)
+            self.datacubefile = '{0}/{1}/{2}/manga-{1}-{2}-LOGCUBE-{3}-MILESHC-MILESHC.fits.gz'.format(
+                                    DAP_DIR, self.plate, self.ifudsgn, PRODOCTS)
+
+        if IMAGE_DIR is None:
+            self.image_file = "{}/{}/images/{}.png".format(DRP_DIR, self.plate, 
+                    self.ifudsgn)
+        else:
+            self.image_file = "{}/{}-{}.png".format(IMAGE_DIR, self.plate, 
+                    self.ifudsgn)
         self.ra = self.drp['objra'][0]
         self.dec = self.drp['objdec'][0]
         self.ifura = self.drp['ifura'][0]
@@ -80,7 +102,7 @@ class MaNGA(object):
         self.psf = self.drp['rfwhm'][0]
         self.z = self.drp['nsa_z'][0]
         self.c = const.c.to(u.km/u.s).value
-        self.d = self.COSMO.comoving_transverse_distance(self.z)
+        self.d = self.COSMO.luminosity_distance(self.z)
         self.arcsec2kpc = self.COSMO.kpc_comoving_per_arcmin(self.z).to(
                 u.kpc/u.arcsec)
         self.repeat, self.alter = self.find_repeat(self)
@@ -96,7 +118,7 @@ class MaNGA(object):
         elif np.bitwise_and(mngtarg1, 2**11):
             Rrange = 2.5 # 2.5Re Secondary
         elif np.bitwise_and(mngtarg1, 2**13):
-            Rrange = 2.5 # full fill the field of view
+            Rrange = 1.5 # full fill the field of view
         else:
             Rrange = 1.5 # Other
         return Rrange
@@ -132,7 +154,7 @@ class MaNGA(object):
         """return or show rgb-image
         """
         try:
-            imagedata = mpimg.imread(IMAGE_DIR + str(self.plate) + '-' + str(self.ifudsgn) + '.png')
+            imagedata = mpimg.imread(self.image_file)
         except:
             print("{} image file doesn't exist!".format(self.plateifu))
             imagedata = np.zeros((2,2))

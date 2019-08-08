@@ -570,6 +570,7 @@ def emission_lines(logLam_temp, lamRange_gal, FWHM_gal, pixel=True, quiet=False,
     if broad_O3:
         # Broad [O III] trace the outflow
         wave = [4958.92, 5006.84]    # air wavelengths
+        wave = [4958.92, 5006.84]    # air wavelengths
         if vacuum:
             wave = air_to_vac(wave)
         # doublet = gaussian(logLam_temp, wave, FWHM_gal, pixel) @ [0.33, 1]

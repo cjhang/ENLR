@@ -4,6 +4,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib.image as mpimg
 import matplotlib.backends.backend_pdf as mpdf
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from astropy import units as u
 from astropy import constants as const
 from astropy.io import fits
@@ -95,7 +96,8 @@ class Maps(MaNGA):
    
     def image_quary(self, ax=None, showImage=True, mini=True, scale=0.1,
                     width=640, height=640, band='R', opt='G', lw = 1, fs=8, 
-                    mag_range=(0, 21), show_bundle=True, showid=True):
+                    mag_range=(0, 21), show_bundle=True, showid=True, 
+                    show_fibers=False, highlight=None):
         base_url = 'http://skyserver.sdss.org/dr14/SkyServerWS/ImgCutout/getjpeg?ra={ra}&dec={dec}&scale={scale}&width={width}&height={height}&opt={opt}&query={band} {mag_range}'
         url = base_url.format(ra=self.ifura, dec=self.ifudec, scale=scale,
                               width=width, height=height, band=band, opt=opt,
@@ -118,8 +120,20 @@ class Maps(MaNGA):
             ax.plot(ax1 / 2 + 1 / scale * bundle_edge[0], 
                     ax2 / 2 + 1 / scale * bundle_edge[1], 
                     color='magenta', lw=lw, alpha=1)
+        if show_fibers:
+            fibers_pos = utils.bundle_fibers(self.ifudsgn)
+            ax.plot(ax1 / 2 + 1 / scale * fibers_pos[0], 
+                    ax2 / 2 + 1 / scale * fibers_pos[1], 
+                    'o', color='white', lw=lw, ms=1/scale-6, 
+                    fillstyle='none', alpha=0.2)
+            if highlight is not None:
+                ax.plot(ax1 / 2 + 1 / scale * fibers_pos[0][highlight], 
+                        ax2 / 2 + 1 / scale * fibers_pos[1][highlight], 
+                        'o', color='red', lw=lw+2, ms=1/scale-6, 
+                        fillstyle='none', alpha=0.5)
+
         if showid:
-            ax.text(width*0.5, height*0.1, 'Plateifu: '+self.plateifu, color='white', fontsize=fs, ha='center')
+            ax.text(width*0.5, height*0.1, 'plateifu: '+self.plateifu, color='white', fontsize=fs, ha='center')
         if showImage:
             if ax == None:
                 return fig
@@ -265,7 +279,7 @@ class Maps(MaNGA):
         """return or show rgb-image
         """
         try:
-            imagedata = mpimg.imread(self.IMAGE_DIR + str(self.plate) + '-' + str(self.ifudsgn) + '.png')
+            imagedata = mpimg.imread(self.image_file)
         except:
             print("{} image file doesn't exist!".format(self.plateifu))
             imagedata = np.zeros((2,2))
@@ -288,7 +302,7 @@ class Maps(MaNGA):
     def line(self, name, mask=True, snr=3, redcorr=False, average=True, 
              select_region=None, return_err=False, plot=False, ax=None, 
              showImage=True, show_psf=False, mini=False, fs=10, 
-             showColorbar=True, **kwargs):
+             showColorbar=True, show_bundle=False, **kwargs):
         '''return the masked emission line
 
         Params:
@@ -340,7 +354,7 @@ class Maps(MaNGA):
             # x_coor, y_coor = self.maps['SPX_SKYCOO'].data
             extent = [x.min(), x.max(), y.min(), y.max()]
             # im = ax.imshow(flux, extent=extent, **kwargs)
-            im = ax.pcolormesh(x, y, flux, **kwargs)
+            im = ax.pcolormesh(x, y, flux, cmap='viridis', **kwargs)
             if mini:
                 ax.tick_params(axis='both', which='major', labelsize=fs)
                 # plot.tick_params(axis='both', which='minor', labelsize=8)
@@ -361,6 +375,8 @@ class Maps(MaNGA):
                 ellipse = Circle((x.mean(), y.mean()), radius=self.psf, 
                                  zorder=2, edgecolor='lightpink', fill=False)
                 ax.add_artist(ellipse)
+            if show_bundle:
+                self.bundle_edge(ax)
             if showImage:
                 return fig
                 #plt.show(fig)
@@ -380,7 +396,8 @@ class Maps(MaNGA):
         return lines_dict
 
     def line_ew(self, name, mask=True, snr=None, plot=False, ax=None, 
-                showImage=True, mini=False, fs=10, showColorbar=True, **kwargs):
+                showImage=True, mini=False, fs=10, showColorbar=True, 
+		show_bundle=False, **kwargs):
         emline_ew = self.maps[self.emline_ew].data[self.emline_dict[name]]
         emline_ew_ivar = self.maps[self.emline_ew_err].data[self.emline_dict[name]]
         if snr:
@@ -404,7 +421,7 @@ class Maps(MaNGA):
             # im = ax.imshow(ew, extent=extent, **kwargs)
             im = ax.pcolormesh(x, y, ew, **kwargs)
             cs = ax.contour(x, y, ew, levels=[3,10,100], colors='r', 
-                       extent=extent)
+                       extent=extent, linewidths=0.5)
             plt.clabel(cs, inline=1, fontsize=5, fmt='%1.1f')
             if mini:
                 ax.set_xticklabels([])
@@ -416,14 +433,16 @@ class Maps(MaNGA):
             if showColorbar:
                 cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
                 cbar.ax.tick_params(labelsize=fs)
+            if show_bundle:
+                self.bundle_edge(ax)
             if showImage:
                 return fig
                 #plt.show()
         else:
             return np.ma.MaskedArray(emline_ew, mask=final_mask)
         
-    def vfield(self, component='stellar', name=None, plot=False, ax=None, showImage=True, 
-            mini=False, fs=10):
+    def vfield(self, component='stellar', name=None, plot=False, ax=None, 
+		showImage=True, show_bundle=False, mini=False, fs=10):
         # Create a masked array with the stellar velocity data
         
         if component == 'stellar':
@@ -457,6 +476,8 @@ class Maps(MaNGA):
             # fig.colorbar(im, ax=ax)
             cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             cbar.ax.tick_params(labelsize=fs)
+            if show_bundle:
+                self.bundle_edge(ax)
             if showImage:
                 return fig
                 #plt.show()
@@ -498,16 +519,16 @@ class Maps(MaNGA):
             ## plot O3-N2
             x0 = lines['NII-6585']/lines['Ha-6564']
             y0 = lines['OIII-5008']/lines['Hb-4862']
-        # elif mode = 'S2':
-            # x0 = lines['SII-6718']/lines['Ha-6564']
-            # y0 = lines['OIII-5008']/lines['Hb-4862']
+        elif mode == 'S2':
+            x0 = (lines['SII-6718']+lines['SII-6732'])/lines['Ha-6564']
+            y0 = lines['OIII-5008']/lines['Hb-4862']
         else:
             raise ValueError
         # filled the masked data with 9999, to avoid the warning massage
         x = np.ma.array(np.log10(x0.filled(9999)), mask=x0.mask)
         y = np.ma.array(np.log10(y0.filled(9999)), mask=y0.mask)
         self.bptx, self.bpty = x, y #convinent for external usage
-        return utils.bptregion(x, y)
+        return utils.bptregion(x, y, mode=mode)
 
     def bpt(self, ax=None, showImage=True, show_model=True, mini=False, fs=10, 
             showTitle=True, show_schawinski=False, showLineName=False, **kwargs):
@@ -563,13 +584,17 @@ class Maps(MaNGA):
 
     def bpt2d(self, snr=3, mask=True, mode='N2', strickMode=False, ax=None, 
               showImage=True, show_Re=False, Re=1, show_psf=False, fs=8, 
-              showTitle=True, mini=False, show_aperture=False, R_ape=3):
+              showTitle=True, mini=False, show_aperture=False, R_ape=3,
+              show_bundle=False):
         """
         Args:
             show_half_Re, show_psf all refer to the r band
         """
-        x_coor, y_coor = self.maps['SPX_SKYCOO'].data
-        x_coor = np.flip(x_coor)
+        #x_coor, y_coor = self.maps['SPX_SKYCOO'].data
+        xx = (np.arange(self.naxis1) - self.naxis1 * 0.5) * 0.5
+        yy = (np.arange(self.naxis2) - self.naxis2 * 0.5) * 0.5
+        x_coor, y_coor = np.meshgrid(xx, yy)
+        # x_coor = np.flip(x_coor)
         # self.image(fig=fig, index=index, showImage=False)
         region_type = np.full(x_coor.shape, np.nan)
         lines = self.lines(mask=mask, snr=snr)
@@ -577,33 +602,43 @@ class Maps(MaNGA):
             ## plot O3-N2
             x0 = lines['NII-6585']/lines['Ha-6564']
             y0 = lines['OIII-5008']/lines['Hb-4862']
-        # elif mode = 'S2':
-            # x0 = lines['SII-6718']/lines['Ha-6564']
-            # y0 = lines['OIII-5008']/lines['Hb-4862']
+        elif mode == 'S2':
+            x0 = (lines['SII-6718']+lines['SII-6732'])/lines['Ha-6564']
+            y0 = lines['OIII-5008']/lines['Hb-4862']
         else:
             raise ValueError
         # filled the masked data with 9999, to avoid the warning massage
         x = np.ma.array(np.log10(x0.filled(9999)), mask=x0.mask)
         y = np.ma.array(np.log10(y0.filled(9999)), mask=y0.mask)
-        if strickMode:
-            region_color = ['red','lightgreen','blue', 'darkred', 'orange']
-            region_name = ['AGN', 'Comp', 'HII', 'Seyfert', 'LINER']
-            
-            AGN, CP, SF, seyfert, liner= utils.bptregion(x, y)
-            region_type[AGN] = 1
-            region_type[CP] = 2
-            region_type[SF] = 3
-            region_type[seyfert] = 4
-            region_type[liner] = 5
-            bounds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] # set color for imshow
-        else:
-            region_color = ['red','lightgreen','blue'] 
-            region_name = ['AGN', 'Comp', 'HII']
-            AGN, CP, SF, *not_need= utils.bptregion(x, y)
-            region_type[AGN] = 1
-            region_type[CP] = 2
-            region_type[SF] = 3
+        if mode == 'N2':
+            if strickMode:
+                region_color = ['red','lightgreen','blue', 'darkred', 'orange']
+                region_name = ['AGN', 'Comp', 'HII', 'Seyfert', 'LINER']
+                
+                AGN, CP, SF, seyfert, liner= utils.bptregion(x, y, mode='N2')
+                region_type[AGN] = 1
+                region_type[CP] = 2
+                region_type[SF] = 3
+                region_type[seyfert] = 4
+                region_type[liner] = 5
+                bounds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] # set color for imshow
+            else:
+                region_color = ['red','lightgreen','blue'] 
+                region_name = ['AGN', 'Comp', 'HII']
+                AGN, CP, SF, *not_need= utils.bptregion(x, y, mode='N2')
+                region_type[AGN] = 1
+                region_type[CP] = 2
+                region_type[SF] = 3
+                bounds = [0.5, 1.5, 2.5, 3.5] # set color for imshow
+        elif mode == 'S2':
+            region_color = ['red','orange','blue'] 
+            region_name = ['Seyfert', 'LIER', 'HII']
+            seyfert, lier, sf = utils.bptregion(x, y, mode='S2')
+            region_type[seyfert] = 1
+            region_type[lier] = 2
+            region_type[sf] = 3
             bounds = [0.5, 1.5, 2.5, 3.5] # set color for imshow
+
         if ax == None:
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -632,42 +667,49 @@ class Maps(MaNGA):
         if show_Re:
             from matplotlib.patches import Ellipse
             ellipse_r = Re*self.elpetro_r
-            ellipse = Ellipse((x_coor.mean(), y_coor.mean()), 
-                               ellipse_r*self.elpetro_ba, ellipse_r, 
+            ellipse = Ellipse((0, 0), 
+                               ellipse_r*self.elpetro_ba*2, ellipse_r*2, 
                                angle=self.elpetro_phi, zorder=2, 
-                               edgecolor='C7', fill=False)
+                               edgecolor='orange', fill=False)
             ax.add_artist(ellipse)
         if show_psf:
             from matplotlib.patches import Circle
-            circle = Circle((x_coor.mean(), y_coor.mean()), radius=self.psf/2, 
+            circle = Circle((0, 0), radius=self.psf/2, 
                              zorder=2, edgecolor='darkviolet', fill=False)
             ax.add_artist(circle)
         if show_aperture:
             from matplotlib.patches import Circle
-            circle = Circle((x_coor.mean(), y_coor.mean()), radius=R_ape, 
+            circle = Circle((0, 0), radius=R_ape, 
                              zorder=2, edgecolor='navy', fill=False)
             ax.add_artist(circle)
-
+        if show_bundle:
+            self.bundle_edge(ax)
         if showImage:
             return fig
             #plt.show(fig)
 
-    def eshape(self, plot=False, ax=None, fs=10, lw=1, ms=2):
+    def eshape(self, plot=False, ax=None, fs=10, lw=1, ms=2 ,Re=None, 
+               useHaEW=False):
         """calculate the extended shape
         
         the morphology of ENLR was distinguished by human before, here try to 
         classified it by fourier series following (Zhicheng He 2018)
         """
+        if Re is None:
+            Re = self.target_range
         frac_list = []
         phi_list = []
-        agn, cp, sf, seyfert, liner, *other = self.bptregion()
         r, rr, phi = self.maps['SPX_ELLCOO'].data
+        agn, cp, sf, seyfert, liner, *other = self.bptregion()
+        if useHaEW:
+            HaEW_region = self.line_ew('Ha-6564') > 3
+            agn = agn & HaEW_region
         for i in range(36):
             phi_min = 10*i
             phi_max = phi_min+10
             phi_list.append(phi_min+5)
             section_bin = utils.sector_binning(r, phi, r_min=0, 
-                    r_max=2.5*self.elpetro_r, phi_min=phi_min, phi_max=phi_max)
+                    r_max=Re*self.elpetro_r, phi_min=phi_min, phi_max=phi_max)
             #return section_bin, l.maps['BINID'].data[0]
             total_pixel = np.sum((self.maps['BINID'].data[0]>0) & section_bin)
             if total_pixel == 0:
@@ -705,16 +747,16 @@ class Maps(MaNGA):
             ax.plot(phi_list, yfit1, '--',label=r'$C_{m=1} + a_0$', lw=lw, ms=ms)
             ax.plot(phi_list, yfit2, '-.', label=r'$C_{m=2} + a_0$', lw=lw, ms=ms)
             ax.legend(loc='upper right', fontsize=fs)
-            ax.text(10, np.max(frac_list)+0.12, 
-                    "\n$r_1$={:.2f} \n$r_2$={:.2f}".format(np.sqrt(a1**2+b1**2)/a0, 
+            ax.text(10, np.max(frac_list)+0.22, 
+                    "\n$\lambda_1$={:.2f} \n$\lambda_2$={:.2f}".format(np.sqrt(a1**2+b1**2)/a0, 
                                                           np.sqrt(a2**2+b2**2)/a0),
                     horizontalalignment='left', verticalalignment='top', fontsize=fs+2)
-            ax.set_ylim(np.min(frac_list)-0.1, np.max(frac_list)+0.1)
+            ax.set_ylim(np.min(frac_list)-0.1, np.max(frac_list)+0.2)
         # print('a0 is {}'.format(a0))
         return np.sqrt(a1**2+b1**2)/a0, np.sqrt(a2**2+b2**2)/a0
 
     def plot(self, lines=['OIII-5008',], lines_ew=['Ha-6564',], 
-             cols=4, showImage=True):
+             cols=4, showImage=True, mode='N2'):
         """fast plot
         """
         subplot_nums = len(lines) + len(lines_ew) + 3
@@ -727,7 +769,7 @@ class Maps(MaNGA):
             self.image(ax=ax_array[indx], showImage=False)
             indx += 1
             # for BPT
-            self.bpt2d(ax=ax_array[indx], snr=3, strickMode=False, 
+            self.bpt2d(ax=ax_array[indx], snr=3, strickMode=False, mode=mode,
                        showImage=False, show_aperture=True, show_psf=True)
             indx += 1
             # for velocity field
@@ -758,8 +800,8 @@ class Maps(MaNGA):
             indx, indy = 0, 0
             self.image(ax=ax_array[indy, indx], showImage=False)
             indx, indy = gen(indx, indy)
-            self.bpt2d(ax=ax_array[indy, indx], snr=3, strickMode=False, 
-                       showImage=False, show_Re=0.5, show_psf=True)
+            self.bpt2d(ax=ax_array[indy, indx], snr=3, mode=mode, 
+                    strickMode=False, showImage=False, show_Re=0.5, show_psf=True)
             indx, indy = gen(indx, indy)
             self.vfield(ax=ax_array[indy,indx], showImage=False)
             indx, indy = gen(indx, indy)
@@ -778,4 +820,16 @@ class Maps(MaNGA):
         else:
             plt.close(fig)
         return fig
+
+    def bundle_edge(self, ax):
+        """show the shadow of bundle coverage"""
+        x_coor, y_coor = self.maps['SPX_SKYCOO'].data
+        x_coor = np.flip(x_coor)
+        with fits.open(self.logcube_file) as f:
+            bundle_mask = f['MASK'].data[0, :, :]
+        cmap = ListedColormap(['#cfcfcf', '#ffffff'])
+        bounds = [-0.5, 0.5, 1.5]
+        norm = BoundaryNorm([-0.5, 0.5, 1.5], cmap.N)
+        ax.pcolormesh(x_coor, y_coor, bundle_mask == 1027, cmap=cmap, norm=norm,
+                zorder=-1)
 

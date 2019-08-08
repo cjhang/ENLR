@@ -48,16 +48,16 @@ class Spaxel(MaNGA):
             ax.set_xlabel("wavelength")
         if showFlux:
             ax.step(wave, self.flux, label='flux', color='k', lw=0.5)
-        if self.fitted:
+        if self.fitted or self.load_fit:
             if showModel:
-                ax.plot(self.wave_fit, self.model, label='model', color='r', lw=1)
+                ax.plot(self.wave, self.model, label='model', color='r', lw=1)
             if showEmlines:
-                ax.plot(self.wave_fit, self.emlines, label='emlines', color='b', lw=1)
+                ax.plot(self.wave, self.emlines, label='emlines', color='b', lw=1)
             if showContinuum:
-                ax.plot(self.wave_fit, self.stellarcontinuum, label='stellar continuum',
+                ax.plot(self.wave, self.stellarcontinuum, label='stellar continuum',
                         color='g', lw=1)
             if showResidual:
-                ax.step(self.wavefit, self.residual-0.5, label='residual', 
+                ax.step(self.wave, self.residual-0.5, label='residual', 
                         where='mid', color='0.5', lw=0.5)
         if waveRange:
             wave_window = (wave > waveRange[0]) & (wave < waveRange[1]) 
@@ -76,7 +76,7 @@ class Spaxel(MaNGA):
         """fitting the spectrum using ppxf
         """
         # Only use the wavelength range in common between galaxy and stellar library.
-        wave_mask = (self.wave > 3540*(1+self.z)) & (self.wave < 7400*(1+self.z))
+        wave_mask = (self.wave > 3585*(1+self.z)) & (self.wave < 7340*(1+self.z))
         self.flux_scale = np.ma.median(self.flux[wave_mask])
         flux = self.flux[wave_mask]/self.flux_scale
         if self.redcorr is not None:
@@ -91,7 +91,7 @@ class Spaxel(MaNGA):
         c = 299792.485
         # define the dispersion of one pixel
         velscale = c*np.log(wave[1]/wave[0]) 
-        FWHM_gal = 2.7
+        FWHM_gal = self.psf
         # load the model
         miles = miles_util.miles(package_path + '/ppxf/miles_models/Mun1.30*.fits', velscale, FWHM_gal)
         reg_dim = miles.templates.shape[1:]
@@ -99,7 +99,7 @@ class Spaxel(MaNGA):
         ## before fitting
         dv = c*(miles.log_lam_temp[0] - np.log(wave[0]))
         vel = c*np.log(1+self.z)
-        start = [vel, 180.]
+        start = [vel, 100.]
         if mode == 'population':
             regul_err = 0.013 # Desired regularization error
             # lam_range_gal = np.array([np.min(wave), np.max(wave)])
@@ -262,280 +262,44 @@ class Spaxel(MaNGA):
         return pp
         #return PPXFwrap(pp, self.flux_scale, self.z, mode=mode) 
 
-    def fitline(self, name, window=20, velocity=150, broad_component=False, 
-                broad_velocity=500, plot=False, quiet=False, return_fig=False, 
-                debug=False):
+    def autofit(self, mode='emline', quiet=1, broad_balmer=800, broad_O3=600, **kwargs):
+        """auto choose whether adding the broad components
         """
-        Fiting the emission line using gaussian profile
-        This procedure try to self-determine how many components in this lines
-        """
-        # fitting preparation
-        names = ['Hb-4862', 'OIII-5008', 'Ha-6564']
-        wavelengths = [4862.69, 5008.24, 6564.61]
-        emline = dict(zip(names, wavelengths))[name]
+        try:
+            try: 
+                # fitting with strong AGN
+                pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800)
+                pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, broad_balmer=800, 
+                                  broad_O3=600)
+            except: # if fitting failed
+                # fitting with weak AGN
+                if not quiet:
+                    print('Change emline with fewer emission lines!')
+                pp1 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True)
+                pp2 = sp.ppxf_fit(mode='emline', quiet=quiet, fewer_lines=True, 
+                                  broad_O3=600)
+        except KeyboardInterrupt:
+            sys.exit()
+        except: # for failed fitting
+            if not quiet:
+                print("Fitting failed!")
+            raise ValueError("Fitting failed")
 
-        # check double lines 
-        if name == 'Ha-6564':
-            return self.fitHa(broad_component=broad_component, 
-                              broad_velocity=broad_velocity, plot=plot, 
-                              quiet=quiet, return_fig=return_fig, debug=debug)
-        lines, wave_range = Spaxel.find_lines(emline, window)
-        wave_window = (self.wave_rest > wave_range[0]) \
-                      & (self.wave_rest < wave_range[1])
-        wave = self.wave_rest[wave_window] - emline
-        dwave = (np.roll(self.wave_rest, -1) - self.wave_rest)[wave_window]
-        flux = ((self.flux - self.stellarcontinuum) * self.redcorr)[wave_window]
-        # fixed those region with all masked
-        flux = np.ma.masked_invalid(flux).filled(0) 
-        flux_err = self.noise[wave_window]
-        scale = 1 #np.median(self.flux)
-        # spectrum parameters
-        dx = np.mean(wave[1:] - wave[:-1])
-        logdx = (np.log(self.wave[-1] + emline) \
-                - np.log(wave[0] + emline))/(wave.size - 1)
-        #instrument sigma in Angstrom
-        instru_sigma = self.psf / 2.355 / logdx / emline 
-        sigma = velocity * emline / (self.c * dx)
-        broad_sigma = broad_velocity * emline / (self.c * dx)
-        line_window = (wave > -window/3) & (wave < window/3)
-        amp = np.abs(np.max(flux[line_window])) / scale
-        if broad_component:
-            #assert broad_velocity
-            # two components of the line
-            x0 = np.array([amp, 0, sigma, amp/10, 0, broad_sigma]) 
-            bound_low = np.array([0, -window/3, instru_sigma, 0, -window, 
-                                 broad_sigma])
-            bound_up = np.array([np.inf, window/3, broad_sigma, np.inf, 
-                                 window, 3000])
+        F = (pp1.chi2_orig - pp2.chi2_orig)*(pp2.vars_num - pp2.params_num ) \
+                / (pp2.params_num - pp1.params_num) / pp2.chi2_orig
+        p_value = 1 - stats.f.cdf(F, pp2.params_num - pp1.params_num, 
+                                     pp2.vars_num - pp2.params_num)
+        if (p_value < 0.05) and ((pp2.chi2 - 1) < (pp1.chi2 - 1)) \
+                and np.any(pp2.gas_flux[-2:]/pp2.gas_flux_error[-2:] > 3):
+            pp = pp2
+            if not quiet:
+                print('Prefer broad [O III]')
         else:
-            x0 = np.array([amp, 0, sigma]) # two components of the line
-            bound_low = np.array([0, -window/3, instru_sigma])
-            bound_up = np.array([np.inf, window/3, broad_sigma])
-        relative_lines = lines - emline
-        near_lines = relative_lines[np.abs(relative_lines) > np.min(np.abs(
-                relative_lines))]
-        for line in near_lines:
-            line_window = (wave > line - window/3) & (wave < line + window/3)
-            amp = np.max(flux[line_window]) / scale
-            x0 = np.append(x0, [amp, line, sigma])
-            bound_low = np.append(bound_low, [0, line - window/3, instru_sigma])
-            bound_up = np.append(bound_up, [np.inf, line + window/3, broad_sigma])
-        def cost_fun(p, t, y, y_err):
-            return (Spaxel.gaussian(t, p) - y) / np.abs(y_err)
-        if debug:
-            bounds = list(zip(bound_low, bound_up))
-            for i in range(len(x0)):
-                if (x0[i] < bounds[i][0]) or (x0[i]>bounds[i][1]):
-                    print("----------Initial value issue!------------")
-                    print('x0:', x0)
-                    print('bound_low:', bound_low)
-                    print('bound_up:', bound_up)
-
-        res_lsq = optimize.least_squares(Spaxel.cost_fun, x0, 
-                                         args=(wave, flux/scale, flux_err/scale), \
-                                         bounds=[bound_low, bound_up], jac='3-point')
-        # derived parameters
-        perror = capfit.cov_err(res_lsq.jac)[1]
-        chi2 = np.sum((flux - scale * Spaxel.gaussian(wave, res_lsq.x))**2 / flux_err**2)
-        flux_fit = scale * Spaxel.gaussian_list(wave, res_lsq.x)
-        # return values
-        class Line(): pass
-        ret_line = Line()
-        # res_lsq.x [amp, mean, sigma]
-        ret_line.noise = flux_err
-        ret_line.narrow_amp = res_lsq.x[0]
-        ret_line.narrow_v = res_lsq.x[1] * (self.c * dx) / emline
-        ret_line.narrow_sigma = res_lsq.x[2] * (self.c * dx) / emline
-        # theorectical integrate S = amp * \sqrt{2*pi*sigma^2}
-        # print('flux broad sum up:', np.sum(flux_fit[1] * dwave))
-        ret_line.narrow_flux = res_lsq.x[0]*np.sqrt(2*np.pi*res_lsq.x[2]**2)
-        ret_line.narrow_flux_err = scale * Spaxel.gen_err(wave, dwave, res_lsq.x[:3], perror[:3])
-        ret_line.narrow_snr = ret_line.narrow_flux / (ret_line.narrow_flux_err + ESP)
-        if broad_component:
-            ret_line.broad_amp = res_lsq.x[3]
-            ret_line.broad_v = res_lsq.x[4] * (self.c * dx) / emline
-            ret_line.broad_sigma = res_lsq.x[5] * (self.c * dx) / emline
-            ret_line.broad_flux = res_lsq.x[3]*np.sqrt(2*np.pi*res_lsq.x[5]**2)
-            ret_line.broad_flux_err = scale * Spaxel.gen_err(wave, dwave, res_lsq.x[3:6], perror[3:6])
-            ret_line.broad_snr = ret_line.broad_flux / (ret_line.broad_flux_err + ESP)
-            ret_line.bn_ratio = ret_line.broad_flux / (ret_line.narrow_flux + ESP)
-            # maximum flux ratio
-            ret_line.bn_amp_ratio = np.max(flux_fit[1]) / (np.max(flux_fit[0])+ESP) 
-        ret_line.chi2 = chi2
-        ret_line.var_num = wave.size
-        ret_line.para_num = res_lsq.x.size
-        ret_line.simple_chi2 = chi2 / (wave.size - res_lsq.x.size)
+            pp = pp1
         if not quiet:
-            print("==========================================")
-            for i in range(0, len(x0), 3):
-                print("Component:", i//3)
-                print("Initial value: {:.2f} {:.2f} {:.2f}".format(*x0[i:i+3]))
-                print("Fitting bounds:")
-                print("  lower: {low[0]:.2f} {low[1]:.2f} {low[2]:.2f}".format(low=bound_low[i:i+3]))
-                print("  upper: {up[0]:.2f} {up[1]:.2f} {up[2]:.2f}".format(up=bound_up[i:i+3]))
-                print("Parameters: {:.2f} {:.2f} {:.2f}".format(*res_lsq.x[i:i+3]))
-                print("Errors: {:.2f} {:.2f} {:.2f}".format(*perror[i:i+3]))
-                print("-----------------------------------------")
-            # calculate the Chi^2
-            print("Chi^2:", ret_line.simple_chi2)
-            print("narrow component SNR:", ret_line.narrow_snr)
-            if broad_component:
-                print("broad-narrow amplitude ratio:", ret_line.bn_amp_ratio)
-                print("broad-narrow flux ratio:", ret_line.bn_ratio)
-                print("broad component SNR:", ret_line.broad_snr)
-            print("==========================================")
-        if plot:
-            fig, [ax1, ax2] = plt.subplots(2, 1, gridspec_kw = {'height_ratios':[3, 1]})
-            plt.subplots_adjust(left=0.1, right=0.9, top=0.8, bottom=0.2, wspace=0.1, hspace=0.0)
-            ax1.step(wave + emline, flux, label='data', where='mid')
-            if len(flux_fit) > 1:
-                for i in range(len(flux_fit)):
-                    ax1.plot(wave + emline, flux_fit[i], label='component {}'.format(i))
-            ax1.plot(wave+emline, scale * Spaxel.gaussian(wave, res_lsq.x), label='fit')
-            ax1.set_xticklabels([])
-            ax1.legend()
-            ax1.set_ylabel('flux')
-            ax2.plot(wave+emline, flux - scale * Spaxel.gaussian(wave, res_lsq.x), label='residual')
-            ax2.set_xlabel('wavelength')
-        if return_fig:
-            return fig
-        else:
-            return ret_line
-    
-    def fitHa(self, window=50, velocity=150, broad_component=False, broad_velocity=500, 
-                plot=False, quiet=False, return_fig=False, debug=False):
-        """
-        Fiting the emission line using gaussian profile
-        This procedure try to self-determine how many components in this lines
-        """
-        # fitting preparation
-        emline = 6564.61
-        wave_range = emline + np.array([-window, window])
-        wave_window = (self.wave_rest > wave_range[0]) \
-                      & (self.wave_rest < wave_range[1])
-        wave = self.wave_rest[wave_window] - emline
-        dwave = (np.roll(self.wave_rest, -1) - self.wave_rest)[wave_window]
-        flux = ((self.flux - self.stellarcontinuum) * self.redcorr)[wave_window]
-        flux = np.ma.masked_invalid(flux).filled(0)
-        flux_err = self.noise[wave_window]
-        scale = 1 #np.median(self.flux)
-        # spectrum parameters
-        dx = np.mean(wave[1:] - wave[:-1])
-        logdx = (np.log(self.wave[-1] + emline) - np.log(wave[0] + emline))/(wave.size - 1)
-        instru_sigma = self.psf / 2.355 / logdx / emline #instrument sigma in Angstrom
-        sigma = velocity * emline / (self.c * dx)
-        rot_vel = 400 * emline / (self.c * dx)
-        broad_sigma = broad_velocity * emline / (self.c * dx)
-        Ha_line_window = (wave > -window/3) & (wave < window/3)
-        Ha_amp = np.abs(np.max(flux[Ha_line_window])) / scale
-        N2_line_window = (wave > 20.62-window/3) & (wave < 20.62+window/3)
-        N2_amp = np.abs(np.max(flux[N2_line_window])) / scale
-        lines = np.array([6549.84, 6564.61, 6585.23]) - emline
-        x0 = [Ha_amp, 0, sigma, N2_amp, sigma]
-        bound_low = np.array([0, -rot_vel, instru_sigma, 0, instru_sigma])
-        bound_up = np.array([np.inf, rot_vel, broad_sigma, np.inf, broad_sigma])
-        # model the lines
-        def fit_narrow(t, p):
-            y_fit = p[0] * np.exp(-(t-lines[1]-p[1])**2/(2*p[2]**2)) + \
-                    p[3]/3 * np.exp(-(t-lines[0]-p[1])**2/(2*p[4]**2)) + \
-                    p[3] * np.exp(-(t-lines[2]-p[1])**2/(2*p[4]**2))
-            return y_fit
-        def fit_broad(t, p):
-            y_fit = p[0] * np.exp(-(t-lines[1]-p[1])**2/(2*p[2]**2)) + \
-                    p[3]/3 * np.exp(-(t-lines[0]-p[1])**2/(2*p[4]**2)) + \
-                    p[3] * np.exp(-(t-lines[2]-p[1])**2/(2*p[4]**2)) + \
-                    p[-3] * np.exp(-(t-p[-2])**2/(2*p[-1]**2))
-            return y_fit
-        if not broad_component:
-            fit_fun = fit_narrow
-        else:
-            x0 = np.append(x0, [Ha_amp/10, 0, 2*broad_sigma]) # two components of the line
-            bound_low = np.append(bound_low, [0, -window, broad_sigma])
-            bound_up = np.append(bound_up, [np.inf, window, 3000])
-            fit_fun = fit_broad
-        def cost_fun(p, t, y, y_err):
-            y_fit = fit_fun(t, p)
-            return (y_fit - y) / np.abs(y_err)
-        if debug:
-            bounds = list(zip(bound_low, bound_up))
-            for i in range(len(x0)):
-                if (x0[i] < bounds[i][0]) or (x0[i]>bounds[i][1]):
-                    print("----------Initial value issue!------------")
-                    print('x0:', x0)
-                    print('bound_low:', bound_low)
-                    print('bound_up:', bound_up)
-
-        res_lsq = optimize.least_squares(cost_fun, x0, args=(wave, flux/scale, 
-                                         flux_err/scale), 
-                                         bounds=[bound_low, bound_up], jac='3-point')
-        # derived parameters
-        perror = capfit.cov_err(res_lsq.jac)[1]
-        chi2 = np.sum((flux - scale * fit_fun(wave, res_lsq.x))**2 / flux_err**2)
-        # return values
-        class Line(): pass
-        ret_line = Line()
-        # res_lsq.x [amp, mean, sigma]
-        ret_line.noise = flux_err
-        ret_line.narrow_amp = res_lsq.x[0]
-        ret_line.narrow_v = res_lsq.x[1] * (self.c * dx) / emline
-        ret_line.narrow_sigma = res_lsq.x[2] * (self.c * dx) / emline
-        ret_line.narrow_fit = Spaxel.gaussian(wave, res_lsq.x[:3])
-        # ret_line.narrow_flux = np.sum(ret_line.narrow_fit * dwave)
-        ret_line.narrow_flux = res_lsq.x[0] * np.sqrt(2*np.pi*res_lsq.x[2]**2)
-        ret_line.narrow_flux_err = scale * Spaxel.gen_err(wave, dwave, res_lsq.x[:3], perror[:3])
-        ret_line.narrow_snr = ret_line.narrow_flux / (ret_line.narrow_flux_err + ESP)
-        if broad_component:
-            ret_line.broad_amp = res_lsq.x[-3]
-            ret_line.broad_v = res_lsq.x[-2] * (self.c * dx) / emline
-            ret_line.broad_sigma = res_lsq.x[-1] * (self.c * dx) / emline
-            ret_line.broad_fit = Spaxel.gaussian(wave, res_lsq.x[-3:])
-            # ret_line.broad_flux = np.sum(ret_line.broad_fit * dwave)
-            ret_line.broad_flux = res_lsq.x[-3] * np.sqrt(2*np.pi*res_lsq.x[-1]**2)
-            ret_line.broad_flux_err = scale * Spaxel.gen_err(wave, dwave, res_lsq.x[-3:], perror[-3:])
-            ret_line.broad_snr = ret_line.broad_flux / (ret_line.broad_flux_err + ESP)
-            ret_line.bn_ratio = ret_line.broad_flux / (ret_line.narrow_flux + ESP)
-            ret_line.bn_amp_ratio = np.max(ret_line.broad_fit) / (np.max(ret_line.narrow_fit) + ESP)
-        ret_line.chi2 = chi2
-        ret_line.var_num = wave.size
-        ret_line.para_num = res_lsq.x.size
-        ret_line.simple_chi2 = chi2 / (wave.size - res_lsq.x.size)
-        if not quiet:
-            print("==========================================")
-            print("Narrow component:")
-            print("Initial value:", x0)
-            print("Fitting bounds:")
-            print("  lower: {}".format(bound_low))
-            print("  upper: {}".format(bound_up))
-            print("Parameters: {}".format(*res_lsq.x))
-            print("Errors: {}".format(*perror))
-            print("-----------------------------------------")
-            # calculate the Chi^2
-            print("Chi^2:", ret_line.simple_chi2)
-            print("narrow component SNR:", ret_line.narrow_snr)
-            if broad_component:
-                print("broad-narrow amplitude ratio:", ret_line.bn_amp_ratio)
-                print("broad-narrow flux ratio:", ret_line.bn_ratio)
-                print("broad component SNR:", ret_line.broad_snr)
-            print("==========================================")
-        if plot:
-            fig, [ax1, ax2] = plt.subplots(2, 1, gridspec_kw = {'height_ratios':[3, 1]})
-            plt.subplots_adjust(left=0.1, right=0.9, top=0.8, bottom=0.2, wspace=0.1, hspace=0.0)
-            ax1.step(wave + emline, flux, label='data', where='mid')
-            if broad_component:
-                ax1.plot(wave + emline, fit_narrow(wave, res_lsq.x[:-3]), label='narrow fit')
-                ax1.plot(wave+emline, Spaxel.gaussian(wave, res_lsq.x[-3:]), label='broad fit')
-                ax1.plot(wave+emline, fit_fun(wave, res_lsq.x), label='fit')
-            else:
-                ax1.plot(wave + emline, fit_narrow(wave, res_lsq.x), label='narrow fit')
-            ax1.set_xticklabels([])
-            ax1.legend()
-            ax1.set_ylabel('flux')
-            ax2.plot(wave+emline, flux - scale * fit_fun(wave, res_lsq.x), label='residual')
-            ax2.set_xlabel('wavelength')
-        if return_fig:
-            return fig
-        else:
-            return ret_line
+            print('p_value:', p_value, 'fit1 chi2:', pp1.chi2, 
+                  'fit2 chi2:', pp2.chi2)
+        return pp
 
     @staticmethod
     def gaussian(t, p):

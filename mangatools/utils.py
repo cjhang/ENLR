@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import os
 import numpy as np
 import re
 from numpy.ma import is_masked
@@ -9,7 +10,10 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 from numpy.linalg import eig, inv
 from astropy.stats import sigma_clip
+from . import yanny
 
+import mangatools as mangatools_package 
+package_path = os.path.dirname(os.path.realpath(mangatools_package.__file__))
 
 def processBar(total, progress, barlength=40):
     barlength, status = barlength, ""
@@ -154,7 +158,10 @@ def bptregion(x, y, mode='N2'):
         region_seyfert = np.logical_and(np.logical_or(y>ke01_line, x>0.32), y>seyfert_liner_line)
         region_liner = np.logical_and(np.logical_or(y>ke01_line, x>0.32), y<seyfert_liner_line)
         region_starforming = np.logical_and(y<ke01_line, x<0.32)
-        return region_seyfert.filled(False), region_liner.filled(False), region_starforming.filled(False)
+        if is_masked(x) or is_masked(y):
+            return region_seyfert.filled(False), region_liner.filled(False), region_starforming.filled(False)
+        else:
+            return region_seyfert, region_liner, region_starforming
 
 def bar_statistic(data, title=None, index=None, fig=None, showImage=True):
     # data can be a list of string or number
@@ -396,8 +403,7 @@ def fixmap(fmap, sigma=20, iters=5, filled=1e-8):
         return fmap
 
 def bundle_edge(ifudsgn):
-    from manga import yanny
-    pos = yanny.yanny(filename='data/manga_simbmap_127.par')
+    pos = yanny.yanny(filename=package_path+'/data/manga_simbmap_127.par')
     n = (int(ifudsgn)//100 - 1) // 6
     for i in range(1, 8):
         n = n - i
@@ -412,4 +418,17 @@ def bundle_edge(ifudsgn):
     pos_dec.append(pos_dec[0])
     return np.array([pos_ra, pos_dec])
 
+def bundle_fibers(ifudsgn):
+    pos = yanny.yanny(filename=package_path+'/data/manga_simbmap_127.par')
+    n = (int(ifudsgn)//100 - 1) // 6
+    for i in range(1, 8):
+        n = n - i
+        if n == 0:
+            break
+    i_low = ((i - 1) * i) * 3 + 1
+    i_up = ((i + 1) * i) * 3 + 1
+    # print(i_low, i_up)
+    pos_ra = pos['SIMBMAP']['raoff'][0: i_up]
+    pos_dec = pos['SIMBMAP']['decoff'][0: i_up]
+    return np.array([pos_ra, pos_dec])
 
