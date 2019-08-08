@@ -2,10 +2,11 @@
 # if exclude is true, it will be excluded from extension analysis
 # History:
 #   2018-04-26: first release
+#   2019-04-24: Modified for MPL-8
 plateifu exclude
 8083-9101 nan
 8133-12704 1
-8256-12704 0
+8256-12704 1
 8329-3701 nan
 8447-9102 nan
 8486-12705 nan
@@ -19,3 +20,10 @@ plateifu exclude
 9088-9102 1
 8447-9102 1
 8329-6102 1
+9514-12702 1
+10508-6103 1
+9094-12704 1
+9091-6101 1
+9892-6102 1
+9892-12702 1
+8593-3703 1
