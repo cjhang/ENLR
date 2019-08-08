@@ -1,7 +1,7 @@
 # Spatial Extension of AGN NLR
 
 ## Size-Luminosity relation of ENLRs
-![R-L relation](/results/all_fitting.pdf)
+![R-L relation](/results/all_fitting.png)
 
 ## Usage
 This repository contains the source code used for the study of spatial extension of AGN narrow line region. The structure of this repository is summarized in [Main.ipynb](Main.ipynb)
