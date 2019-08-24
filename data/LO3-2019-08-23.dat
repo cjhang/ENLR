@@ -1,0 +1,3 @@
+# AGNs_file: data/AGNs-2018-04-26.dat
+# Using datacube fitting map to calculate the L[O III] 5007
+plateifu LO3 LO3_err_low LO3_err_up LO3_redcorr LO3_redcorr_err_low LO3_redcorr_err_up outflow_strength outflow_strength_err
