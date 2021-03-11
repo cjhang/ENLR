@@ -3,6 +3,10 @@
 ## Size-Luminosity relation of ENLRs
 ![R-L relation](/results/all_fitting.png)
 
+The best fitting:
+$$\log\left(\frac{R}{\text{pc}}\right) = (0.42 \pm 0.02) \log\left(\frac{L_{\rm [O\,III]}}{\rm erg\,s^{-1}}\right) - (13.97 \pm 0.95)$$
+**There is a typo in the published paper for this function, the intercept should be -13.97 instead of 15.70**
+
 ## Usage
 This repository contains the source code used for the study of spatial extension of AGN narrow line region. The structure of this repository is summarized in [Main.ipynb](Main.ipynb)
 
